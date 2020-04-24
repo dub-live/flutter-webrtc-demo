@@ -10,6 +10,7 @@ typedef void RouteCallback(BuildContext context);
 final List<RouteItem> items = <RouteItem>[
   RouteItem(
       title: 'GetUserMedia Test',
+      subtitle: "Launches GetUserMediaSample",
       push: (BuildContext context) {
         Navigator.push(
             context,
@@ -18,6 +19,7 @@ final List<RouteItem> items = <RouteItem>[
       }),
   RouteItem(
       title: 'LoopBack Sample',
+      subtitle: "Launches LoopBackSample",
       push: (BuildContext context) {
         Navigator.push(
             context,
@@ -26,6 +28,7 @@ final List<RouteItem> items = <RouteItem>[
       }),
   RouteItem(
       title: 'DataChannel Test',
+      subtitle: "Launches DataChannelSample",
       push: (BuildContext context) {
         Navigator.push(
             context,
