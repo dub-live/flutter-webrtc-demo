@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:async';
+import 'package:flutter_socket_io/socket_io_manager.dart';
 import 'package:flutter_webrtc/webrtc.dart';
 
 import 'random_string.dart';
+import 'package:flutter_socket_io/flutter_socket_io.dart';
 
 import '../utils/device_info.dart'
     if (dart.library.js) '../utils/device_info_web.dart';
@@ -32,15 +34,15 @@ typedef void DataChannelMessageCallback(
 typedef void DataChannelCallback(RTCDataChannel dc);
 
 class Signaling {
-  JsonEncoder _encoder = JsonEncoder();
-  JsonDecoder _decoder = JsonDecoder();
+  JsonEncoder _encoder = new JsonEncoder();
+  JsonDecoder _decoder = new JsonDecoder();
   String _selfId = randomNumeric(6);
-  SimpleWebSocket _socket;
+  SocketIO _socketIO;
   var _sessionId;
   var _host;
-  var _port = 443;
-  var _peerConnections = Map<String, RTCPeerConnection>();
-  var _dataChannels = Map<String, RTCDataChannel>();
+  var _port = 8086;
+  var _peerConnections = new Map<String, RTCPeerConnection>();
+  var _dataChannels = new Map<String, RTCDataChannel>();
   var _remoteCandidates = [];
   var _turnCredential;
 
@@ -78,7 +80,7 @@ class Signaling {
   final Map<String, dynamic> _constraints = {
     'mandatory': {
       'OfferToReceiveAudio': true,
-      'OfferToReceiveVideo': false,
+      'OfferToReceiveVideo': true,
     },
     'optional': [],
   };
@@ -102,7 +104,7 @@ class Signaling {
     _peerConnections.forEach((key, pc) {
       pc.close();
     });
-    if (_socket != null) _socket.close();
+    if (_socketIO != null) SocketIOManager().destroySocket(_socketIO);
   }
 
   void switchCamera() {
@@ -143,7 +145,7 @@ class Signaling {
         {
           List<dynamic> peers = data;
           if (this.onPeersUpdate != null) {
-            Map<String, dynamic> event = Map<String, dynamic>();
+            Map<String, dynamic> event = new Map<String, dynamic>();
             event['self'] = _selfId;
             event['peers'] = peers;
             this.onPeersUpdate(event);
@@ -164,8 +166,8 @@ class Signaling {
 
           var pc = await _createPeerConnection(id, media, false);
           _peerConnections[id] = pc;
-          await pc.setRemoteDescription(
-              RTCSessionDescription(description['sdp'], description['type']));
+          await pc.setRemoteDescription(new RTCSessionDescription(
+              description['sdp'], description['type']));
           await _createAnswer(id, pc, media);
           if (this._remoteCandidates.length > 0) {
             _remoteCandidates.forEach((candidate) async {
@@ -182,8 +184,8 @@ class Signaling {
 
           var pc = _peerConnections[id];
           if (pc != null) {
-            await pc.setRemoteDescription(
-                RTCSessionDescription(description['sdp'], description['type']));
+            await pc.setRemoteDescription(new RTCSessionDescription(
+                description['sdp'], description['type']));
           }
         }
         break;
@@ -192,8 +194,10 @@ class Signaling {
           var id = data['from'];
           var candidateMap = data['candidate'];
           var pc = _peerConnections[id];
-          RTCIceCandidate candidate = RTCIceCandidate(candidateMap['candidate'],
-              candidateMap['sdpMid'], candidateMap['sdpMLineIndex']);
+          RTCIceCandidate candidate = new RTCIceCandidate(
+              candidateMap['candidate'],
+              candidateMap['sdpMid'],
+              candidateMap['sdpMLineIndex']);
           if (pc != null) {
             await pc.addCandidate(candidate);
           } else {
@@ -260,9 +264,12 @@ class Signaling {
     }
   }
 
+  void _socketStatus(dynamic data) => print("socket status: $data");
+
   void connect() async {
-    var url = 'https://$_host:$_port/ws';
-    _socket = SimpleWebSocket(url);
+    var url = 'https://$_host:$_port';
+    _socketIO = SocketIOManager()
+        .createSocketIO(url, "/ws", socketStatusCallback: _socketStatus);
 
     print('connect to $url');
 
@@ -288,7 +295,7 @@ class Signaling {
     //   } catch (e) {}
     // }
 
-    _socket.onOpen = () {
+    _socketIO.subscribe('open', () {
       print('onOpen');
       this?.onStateChange(SignalingState.ConnectionOpen);
       _send('new', {
@@ -296,37 +303,47 @@ class Signaling {
         'id': _selfId,
         'user_agent': DeviceInfo.userAgent
       });
-    };
+    });
 
-    _socket.onMessage = (message) {
-      print('Recivied data: ' + message);
-      JsonDecoder decoder = JsonDecoder();
-      this.onMessage(decoder.convert(message));
-    };
+    // peers, offer, answer, candidate, leave, bye, keepalive
+    _socketIO.subscribe(
+        'peers', (data) => this.onMessage(_decoder.convert(data)));
+    _socketIO.subscribe(
+        'offer', (data) => this.onMessage(_decoder.convert(data)));
+    _socketIO.subscribe(
+        'answer', (data) => this.onMessage(_decoder.convert(data)));
+    _socketIO.subscribe(
+        'candidate', (data) => this.onMessage(_decoder.convert(data)));
+    _socketIO.subscribe(
+        'leave', (data) => this.onMessage(_decoder.convert(data)));
+    _socketIO.subscribe(
+        'bye', (data) => this.onMessage(_decoder.convert(data)));
+    _socketIO.subscribe(
+        'keepalive', (data) => this.onMessage(_decoder.convert(data)));
 
-    _socket.onClose = (int code, String reason) {
-      print('Closed by server [$code => $reason]!');
+    _socketIO.subscribe('close', (data) {
+      print('Closed by server - $data!');
       if (this.onStateChange != null) {
         this.onStateChange(SignalingState.ConnectionClosed);
       }
-    };
+    });
 
-    await _socket.connect();
+    await _socketIO.connect();
   }
 
   Future<MediaStream> createStream(media, user_screen) async {
     final Map<String, dynamic> mediaConstraints = {
       'audio': true,
-      // 'video': {
-      //   'mandatory': {
-      //     'minWidth':
-      //         '640', // Provide your own width, height and frame rate here
-      //     'minHeight': '480',
-      //     'minFrameRate': '30',
-      //   },
-      //   'facingMode': 'user',
-      //   'optional': [],
-      // }
+      'video': {
+        'mandatory': {
+          'minWidth':
+              '640', // Provide your own width, height and frame rate here
+          'minHeight': '480',
+          'minFrameRate': '30',
+        },
+        'facingMode': 'user',
+        'optional': [],
+      }
     };
 
     MediaStream stream = user_screen
@@ -388,7 +405,7 @@ class Signaling {
   }
 
   _createDataChannel(id, RTCPeerConnection pc, {label: 'fileTransfer'}) async {
-    RTCDataChannelInit dataChannelDict = RTCDataChannelInit();
+    RTCDataChannelInit dataChannelDict = new RTCDataChannelInit();
     RTCDataChannel channel = await pc.createDataChannel(label, dataChannelDict);
     _addDataChannel(id, channel);
   }
@@ -427,9 +444,6 @@ class Signaling {
   }
 
   _send(event, data) {
-    var request = Map();
-    request["type"] = event;
-    request["data"] = data;
-    _socket.send(_encoder.convert(request));
+    _socketIO.sendMessage(event, data);
   }
 }
